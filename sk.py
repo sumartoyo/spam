@@ -7,114 +7,111 @@ import nltk
 from nltk.stem.lancaster import LancasterStemmer
 from sklearn import svm
 import threading
-import itertools
+import multiprocessing
 
-stemmer = LancasterStemmer()
-rgx_nonletter = re.compile(r'[^A-Za-z\s]+')
-rgx_onechar = re.compile(r'\s+[A-Za-z]{1}\s+')
-n_features = 2000
-min_idf = 4
+Stemmer = LancasterStemmer()
+RgxNonletter = re.compile(r'[^A-Za-z\s]+')
+RgxOnechar = re.compile(r'\s+[A-Za-z]{1}\s+')
+Dimension = 2000
+MinIdf = 4
+Cpus = multiprocessing.cpu_count()
 
 def read_doc(file):
     f = open(file)
     content = f.read()
     f.close()
-    content = rgx_nonletter.sub('', content)
-    content = rgx_onechar.sub(' ', content)
     return content
 
-def get_contents(dir):
+def clean(contents):
+    for i in range(0, len(contents)):
+        content = contents[i]
+        content = RgxNonletter.sub('', content)
+        content = RgxOnechar.sub(' ', content)
+        contents[i] = content
+
+def read_dir(dir, limit=None):
     contents = []
     for doc in [f for f in os.listdir(dir) if path.isfile(path.join(dir, f))]:
         content = read_doc(path.join(dir, doc))
         contents.append(content)
+    clean(contents)
+    if limit: # DEBUG
+        contents[:] = contents[:limit]
     return contents
+
+def get_enron():
+    c_enron = 4
+    contents, labels = [], []
+    dir_enron = path.join('..', 'enron')
+    for i_enron in range(0, c_enron):
+        dir_version = path.join(dir_enron, 'enron{}'.format(i_enron+1))
+        for label in [0, 1]:
+            cat = 'ham' if label == 0 else 'spam' if label == 1 else None
+            dir_cat = path.join(dir_version, cat)
+            limit = 1000 if label == 0 else 500 if label == 1 else None
+            contents_dir = read_dir(dir_cat, limit)
+            contents.extend(contents_dir)
+            labels.extend([label] * len(contents_dir))
+    return contents, labels
 
 def get_tokens(content):
     tokens = nltk.word_tokenize(content)
-    stems = [stemmer.stem(token) for token in tokens]
+    stems = [Stemmer.stem(token) for token in tokens]
     return stems
 
-def train():
-
-    def read_dir(dir, label, contents_dir, labels_dir):
-        contents_dir[:] = get_contents(dir)
-        labels_dir[:] = [label] * len(contents_dir)
-
-    c_enron = 1
-    contents, labels = [], []
-    dir = path.join('..', 'dimas')
-    for i in range(0, c_enron):
-        ver = path.join(dir, 'enron{}'.format(i+1))
-        contents_s, labels_s = [], []
-        contents_h, labels_h = [], []
-        thread_s = threading.Thread(target=read_dir, args=(path.join(ver, 'spam'), 1, contents_s, labels_s))
-        thread_h = threading.Thread(target=read_dir, args=(path.join(ver, 'ham'), 0, contents_h, labels_h))
-        thread_s.start()
-        thread_h.start()
-        thread_s.join()
-        thread_h.join()
-        contents.extend(contents_s)
-        labels.extend(labels_s)
-        contents.extend(contents_h)
-        labels.extend(labels_h)
-
-    print '\tendof dir'
-
+def get_tfidf(contents):
     vectorizer = TfidfVectorizer(analyzer='word', stop_words='english', tokenizer=get_tokens)
     tfidf = vectorizer.fit_transform(contents)
-    idf = vectorizer.idf_
-    words = vectorizer.get_feature_names()
+    return tfidf, vectorizer
 
-    print '\tendof tfidf'
-
+def select(idf):
     argsort = np.argsort(idf)
-    i_start = (idf < min_idf).nonzero()[0].shape[0]
-    i_end = i_start + n_features
-    tfidf_selected = tfidf[:,argsort]#[:,i_start:i_end]
-    words_selected = np.array(words)#[argsort][i_start:i_end]
-    features = np.zeros(tfidf_selected.shape, dtype=np.uint8)
-    features[tfidf_selected.nonzero()] = 1
+    i = (idf < MinIdf).nonzero()[0].shape[0]
+    j = i + Dimension
+    len_idf = idf.shape[0]
+    j = len_idf if j > len_idf else j
+    return argsort, i, j
 
-    print '\tendof select features'
-
+def train(samples, labels):
     clf = svm.SVC()
-    clf.fit(features, labels)
+    clf.fit(samples, labels)
+    return clf
 
-    print '\tendof train'
-
-    return clf, words_selected
-
-def get_feature(file, words):
-    content = read_doc(file)
-    tokens = set(get_tokens(content))
-    feature = []
-    for word in words:
-        feature.append(1 if word in tokens else 0)
-    return feature
+def transform_tfidf(contents, transformer, argsort, i, j):
+    tfidf = transformer(contents)
+    return tfidf[:,argsort][:,i:j]
 
 def robot():
     
-    print 'train'
-    clf, words = train()
+    print 'fetch'
+    contents, labels = get_enron()
+    c_spams = np.array(labels).nonzero()[0].shape[0]
+    print 'spam:ham {}:{}'.format(c_spams, len(labels)-c_spams)
     
-    def test(type, words):
-        count = 0
-        features = []
-        dir = path.join('..', 'dimas', 'enron1', type)
-        for doc in [f for f in os.listdir(dir) if path.isfile(path.join(dir, f))]:
-            count += 1
-            feature = get_feature(path.join(dir, doc), words)
-            features.append(feature)
-        print '{} count'.format(type), count
-        classified = clf.predict(features)
-        nonzero = classified.nonzero()[0].shape[0]
-        print '{} nonzero'.format(type), 100.*nonzero/count
+    print 'tfidf'
+    tfidf, vectorizer = get_tfidf(contents)
+
+    # print 'select'
+    # idf = vectorizer.idf_
+    # argsort, i, j = select(idf)
+    # tfidf = tfidf[:,argsort][:,i:j]
+
+    print 'train'
+    clf = train(tfidf, labels)
+    
+    def test(label):
+        cat = 'ham' if label == 0 else 'spam' if label == 1 else None
+        dir = path.join('..', 'enron', 'enron6', cat)
+        contents_test = read_dir(dir)
+        # tfidf_test = transform_tfidf(contents_test, vectorizer.transform, argsort, i, j)
+        tfidf_test = vectorizer.transform(contents_test)
+        c_contents = len(contents_test)
+        print '{} count'.format(cat), c_contents
+        classified = clf.predict(tfidf_test)
+        c_positives = classified.nonzero()[0].shape[0]
+        print '{} error'.format(cat), c_positives*100./c_contents if label == 1 else (c_contents-c_positives)*100./c_contents if label == 0 else None
 
     print 'test'
-    thread_s = threading.Thread(target=test, args=('spam', words))
-    thread_h = threading.Thread(target=test, args=('ham', words))
-    thread_s.start()
-    thread_s.join()
-    thread_h.start()
-    thread_h.join()
+    threads = [threading.Thread(target=test, args=(label,)) for label in [0, 1]]
+    [thread.start() for thread in threads]
+    [thread.join() for thread in threads]
