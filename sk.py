@@ -6,12 +6,13 @@ import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 import nltk
 from nltk.stem.lancaster import LancasterStemmer
+from nltk.stem.porter import PorterStemmer
 from sklearn import svm
 from sklearn.naive_bayes import MultinomialNB
 import threading
 import multiprocessing
 
-Stemmer = LancasterStemmer()
+Stemmer = PorterStemmer()
 RgxNonletter = re.compile(r'[^A-Za-z\s]+')
 RgxOnechar = re.compile(r'\s+[A-Za-z]{1}\s+')
 MinIdf = 4
@@ -46,37 +47,48 @@ def read_dir(folder):
     return contents
 
 def get_enron():
-    c_enron = 2
+    c_enron = 6
     contents, labels = [], []
-    dir_enron = path.join('..', 'enron')
-    for i_enron in range(0, c_enron):
-        dir_version = path.join(dir_enron, 'enron{}'.format(i_enron+1))
-        for label in [0, 1]:
-            cat = 'ham' if label == 0 else 'spam' if label == 1 else None
-            dir_cat = path.join(dir_version, cat)
-            contents_dir = read_dir(dir_cat)
-            contents.extend(contents_dir)
-            labels.extend([label] * len(contents_dir))
+    dirs = [path.join('..', 'enron', 'enron{}'.format(i+1)) for i in range(0, c_enron)]
+    for label in [0, 1]:
+        if label == 0: cat = 'ham'
+        if label == 1: cat = 'spam'
+        cts = [read_dir(path.join(d, cat)) for d in dirs]
+        cts[:] = [c for ct in cts for c in ct]
+        contents.extend(cts)
+        labels.extend([label] * len(cts))
     clean(contents)
-    return contents, labels
+    return pd.DataFrame({'contents':contents, 'labels':labels})
 
-def get_tokens(content):
-    tokens = nltk.word_tokenize(content)
-    stems = [Stemmer.stem(token) for token in tokens]
-    return stems
+class Tfidf:
+    
+    def __init__(self):
+        self.vectorizer = TfidfVectorizer(analyzer='word', stop_words='english', tokenizer=self.get_tokens)
 
-def get_tfidf(contents):
-    vectorizer = TfidfVectorizer(analyzer='word', stop_words='english', tokenizer=get_tokens)
-    tfidf = vectorizer.fit_transform(contents)
-    return tfidf, vectorizer
+    def get_tokens(self, content):
+        tokens = nltk.word_tokenize(content)
+        stems = [Stemmer.stem(token) for token in tokens]
+        return stems
 
-def select(idf, dimension):
-    argsort = np.argsort(idf)
-    start = (idf < MinIdf).nonzero()[0].shape[0]
-    stop = start + dimension
-    if stop > idf.shape[0]:
-        stop = idf.shape[0]
-    return argsort, start, stop
+    def fit(self, contents):
+        tfidf = self.vectorizer.fit_transform(contents)
+        self.sort(tfidf.shape[1])
+        return self.select(tfidf)
+
+    def sort(self, dimension):
+        self.argsort = np.argsort(self.vectorizer.idf_)
+        self.start = (self.vectorizer.idf_ < MinIdf).nonzero()[0].shape[0]
+        self.stop = self.start + dimension
+        if self.stop > self.vectorizer.idf_.shape[0]:
+            self.stop = self.vectorizer.idf_.shape[0]
+
+    def select(self, tfidf):
+        return tfidf[:,self.argsort][:,self.start:]
+        # return tfidf[:,self.argsort][:,self.start:self.stop]
+
+    def transform(self, contents):
+        tfidf = self.vectorizer.transform(contents)
+        return self.select(tfidf)
 
 def train(samples, labels):
     # clf = svm.SVC()
@@ -84,37 +96,28 @@ def train(samples, labels):
     clf.fit(samples, labels)
     return clf
 
-def transform_tfidf(contents, transformer, argsort, start, stop):
-    tfidf = transformer(contents)
-    return tfidf[:,argsort][:,start:stop]
-
 def robot():
     
     print 'read'
-    contents, labels = get_enron()
+    df = get_enron()
 
     print 'random'
-    df = pd.DataFrame({'contents':contents, 'labels':labels})
-    df = df.iloc[np.random.permutation(len(labels))]
-    c_test = int(round(len(labels)*10./100))
+    df = df.iloc[np.random.permutation(len(df))]
+    c_test = int(round(len(df)*10./100))
     df_train, df_test = df[c_test:], df[:c_test]
     contents_train, labels_train = df_train['contents'].values, df_train['labels'].values
     contents_test, labels_test = df_test['contents'].values, df_test['labels'].values
     
     print 'tfidf'
-    features_train, vectorizer = get_tfidf(contents_train)
-
-    print 'select'
-    idf = vectorizer.idf_
-    argsort, start, stop = select(idf, contents_train.shape[0])
-    features_train = features_train[:,argsort][:,start:stop]
+    tfidf = Tfidf()
+    features_train = tfidf.fit(contents_train)
     print '  features_train', features_train.shape
 
     print 'train'
     clf = train(features_train, labels_train)
 
     print 'test'
-    features_test = transform_tfidf(contents_test, vectorizer.transform, argsort, start, stop)
+    features_test = tfidf.transform(contents_test)
     labels_predict = clf.predict(features_test)
     diffs = labels_test - labels_predict
     false_spam = (diffs == 1).nonzero()[0].shape[0]
