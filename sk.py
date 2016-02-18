@@ -9,55 +9,38 @@ from nltk.stem.lancaster import LancasterStemmer
 from nltk.stem.porter import PorterStemmer
 from sklearn import svm
 from sklearn.naive_bayes import MultinomialNB
-import threading
 import multiprocessing
+from multiprocessing.pool import ThreadPool
 
 Stemmer = PorterStemmer()
-RgxNonletter = re.compile(r'[^A-Za-z\s]+')
-RgxOnechar = re.compile(r'\s+[A-Za-z]{1}\s+')
 MinIdf = 4
+Ccpus = multiprocessing.cpu_count()
 
-def clean(contents):
+def get_enron():
 
-    def clean_range(start, stop):
-        for c in range(start, stop):
-            content = contents[c]
-            content = RgxNonletter.sub('', content)
-            content = RgxOnechar.sub(' ', content)
-            contents[c] = content
-
-    cpus = multiprocessing.cpu_count()
-    width = len(contents) / cpus
-    ranges = [[start, start+width] for start in [i*width for i in range(0, cpus)]]
-    ranges[-1][-1] = len(contents)
-    threads = [threading.Thread(target=clean_range, args=tuple(r)) for r in ranges]
-    [thread.start() for thread in threads]
-    [thread.join() for thread in threads]
-
-def read_dir(folder):
-
-    def read_file(path):
+    c_enron = 6
+    enrons = [path.join('..', 'enron', 'enron{}'.format(i+1)) for i in range(0, c_enron)]
+    files, labels = [], []
+    for cat in [('spam', 1), ('ham', 0)]:
+        dirs = [path.join(e, cat[0]) for e in enrons]
+        fs = [path.join(d, f) for d in dirs for f in os.listdir(d) if path.isfile(path.join(d, f))]
+        labels.extend([cat[1]] * len(fs))
+        files.extend(fs)
+    print '  got files and labels'
+    
+    re_nonletter = re.compile(r'[^A-Za-z\s]+')
+    re_oneletter = re.compile(r'\s+[A-Za-z]{1}\s+')
+    def read_files(path):
         f = open(path)
         content = f.read()
         f.close()
+        content = re_nonletter.sub('', content)
+        content = re_oneletter.sub(' ', content)
         return content
+    pool = ThreadPool(processes=Ccpus)
+    contents = pool.map(read_files, files)
+    print '  read and cleaned'
 
-    files = [f for f in os.listdir(folder) if path.isfile(path.join(folder, f))]
-    contents = [read_file(path.join(folder, f)) for f in files]
-    return contents
-
-def get_enron():
-    c_enron = 6
-    contents, labels = [], []
-    dirs = [path.join('..', 'enron', 'enron{}'.format(i+1)) for i in range(0, c_enron)]
-    for label in [0, 1]:
-        if label == 0: cat = 'ham'
-        if label == 1: cat = 'spam'
-        cts = [read_dir(path.join(d, cat)) for d in dirs]
-        cts[:] = [c for ct in cts for c in ct]
-        contents.extend(cts)
-        labels.extend([label] * len(cts))
-    clean(contents)
     return pd.DataFrame({'contents':contents, 'labels':labels})
 
 class Tfidf:
@@ -78,9 +61,9 @@ class Tfidf:
     def sort(self, dimension):
         self.argsort = np.argsort(self.vectorizer.idf_)
         self.start = (self.vectorizer.idf_ < MinIdf).nonzero()[0].shape[0]
-        self.stop = self.start + dimension
-        if self.stop > self.vectorizer.idf_.shape[0]:
-            self.stop = self.vectorizer.idf_.shape[0]
+        # self.stop = self.start + dimension
+        # if self.stop > self.vectorizer.idf_.shape[0]:
+        #     self.stop = self.vectorizer.idf_.shape[0]
 
     def select(self, tfidf):
         return tfidf[:,self.argsort][:,self.start:]
@@ -108,21 +91,21 @@ def robot():
     contents_train, labels_train = df_train['contents'].values, df_train['labels'].values
     contents_test, labels_test = df_test['contents'].values, df_test['labels'].values
     
-    print 'tfidf'
-    tfidf = Tfidf()
-    features_train = tfidf.fit(contents_train)
-    print '  features_train', features_train.shape
+    # print 'tfidf'
+    # tfidf = Tfidf()
+    # features_train = tfidf.fit(contents_train)
+    # print '  features_train', features_train.shape
 
-    print 'train'
-    clf = train(features_train, labels_train)
+    # print 'train'
+    # clf = train(features_train, labels_train)
 
-    print 'test'
-    features_test = tfidf.transform(contents_test)
-    labels_predict = clf.predict(features_test)
-    diffs = labels_test - labels_predict
-    false_spam = (diffs == 1).nonzero()[0].shape[0]
-    false_ham = (diffs == -1).nonzero()[0].shape[0]
-    c_spam = labels_test.nonzero()[0].shape[0]
-    c_ham = labels_test.shape[0] - c_spam
-    print '  harusnya spam tapi bukan {}'.format(false_spam*100./c_spam)
-    print '  harusnya ham tapi bukan {}'.format(false_ham*100./c_ham)
+    # print 'test'
+    # features_test = tfidf.transform(contents_test)
+    # labels_predict = clf.predict(features_test)
+    # diffs = labels_test - labels_predict
+    # false_spam = (diffs == 1).nonzero()[0].shape[0]
+    # false_ham = (diffs == -1).nonzero()[0].shape[0]
+    # c_spam = labels_test.nonzero()[0].shape[0]
+    # c_ham = labels_test.shape[0] - c_spam
+    # print '  harusnya spam tapi bukan {}'.format(false_spam*100./c_spam)
+    # print '  harusnya ham tapi bukan {}'.format(false_ham*100./c_ham)
