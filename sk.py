@@ -8,6 +8,7 @@ import Stemmer
 from sklearn.naive_bayes import MultinomialNB
 import multiprocessing
 from functools import partial
+import pickle
 
 Enrons = 6
 MaxDf = 0.6
@@ -33,7 +34,7 @@ def get_enron():
         fs = [path.join(d, f) for d in dirs for f in os.listdir(d) if path.isfile(path.join(d, f))]
         labels.extend([cat[1]] * len(fs))
         files.extend(fs)
-    
+
     pool = multiprocessing.Pool(processes=Processes)
     contents = pool.map(partial_read_file, files)
     pool.close()
@@ -52,9 +53,10 @@ def train(samples, labels):
     return clf
 
 def robot():
-    
+
     print 'read'
-    df = get_enron()
+    # df = get_enron()
+    contents, labels = pickle.load(open('contents.pkl', 'r')), pickle.load(open('labels.pkl', 'r'))
 
     print 'fold'
     # because KFold is too mainstream
@@ -63,7 +65,7 @@ def robot():
     df_train, df_test = df[c_test:], df[:c_test]
     contents_train, labels_train = df_train['contents'].values, df_train['labels'].values
     contents_test, labels_test = df_test['contents'].values, df_test['labels'].values
-    
+
     print 'tfidf'
     tfidf = StemmedTfidfVectorizer(analyzer='word', stop_words='english', max_df=MaxDf)
     features_train = tfidf.fit_transform(contents_train)
