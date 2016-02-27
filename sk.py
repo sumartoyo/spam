@@ -1,17 +1,19 @@
+import re
 import os
 import os.path as path
-import re
 import numpy as np
 import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 import Stemmer
 from sklearn.naive_bayes import MultinomialNB
+from sklearn.linear_model import SGDClassifier
 import multiprocessing
 from functools import partial
 import pickle
+from sklearn.decomposition import TruncatedSVD
+from sklearn.preprocessing import MinMaxScaler
 
 Enrons = 6
-MaxDf = 0.6
 Processes = multiprocessing.cpu_count()
 
 def read_file(path, re_nonletter, re_oneletter):
@@ -47,40 +49,39 @@ class StemmedTfidfVectorizer(TfidfVectorizer):
         analyzer = super(TfidfVectorizer, self).build_analyzer()
         return lambda doc: Stemmer.Stemmer('en').stemWords(analyzer(doc))
 
-def train(samples, labels):
-    clf = MultinomialNB()
-    clf.fit(samples, labels)
-    return clf
+def fold(feats, labels):
+    length = labels.shape[0]
+    iloc = np.random.permutation(length)
+    _feats, _labels = feats[iloc], labels[iloc]
+    c_test = int(round(length*10./100))
+    return _feats[c_test:], _labels[c_test:], _feats[:c_test], _labels[:c_test]
 
-def robot():
+def pickling():
+    contents = pickle.load(open('contents.pkl', 'r'))
+    for max_df in np.arange(1., .0, -0.1):
+        vec = StemmedTfidfVectorizer(analyzer='word', stop_words='english', max_df=max_df)
+        tfidf = vec.fit_transform(contents)
+        print 'max_df {} shape {}'.format(max_df, tfidf.shape[1])
+        with open('tfidf.{}.pkl'.format(max_df), 'w') as f:
+            pickle.dump(tfidf, f)
 
-    print 'read'
-    # df = get_enron()
-    contents, labels = pickle.load(open('contents.pkl', 'r')), pickle.load(open('labels.pkl', 'r'))
-
-    print 'fold'
-    # because KFold is too mainstream
-    df = df.iloc[np.random.permutation(len(df))]
-    c_test = int(round(len(df)*10./100))
-    df_train, df_test = df[c_test:], df[:c_test]
-    contents_train, labels_train = df_train['contents'].values, df_train['labels'].values
-    contents_test, labels_test = df_test['contents'].values, df_test['labels'].values
-
-    print 'tfidf'
-    tfidf = StemmedTfidfVectorizer(analyzer='word', stop_words='english', max_df=MaxDf)
-    features_train = tfidf.fit_transform(contents_train)
-    print '  features_train', features_train.shape
-
-    print 'train'
-    clf = train(features_train, labels_train)
-
-    print 'test'
-    features_test = tfidf.transform(contents_test)
-    labels_predict = clf.predict(features_test)
-    diffs = labels_test - labels_predict
-    false_spam = (diffs == 1).nonzero()[0].shape[0]
-    false_ham = (diffs == -1).nonzero()[0].shape[0]
-    c_spam = labels_test.nonzero()[0].shape[0]
-    c_ham = labels_test.shape[0] - c_spam
-    print '  harusnya spam tapi bukan {}'.format(false_spam*100./c_spam)
-    print '  harusnya ham tapi bukan {}'.format(false_ham*100./c_ham)
+def get_accuracy(max_df, n_iter=4, clf=MultinomialNB(), use_lsa=False):
+    # SVM: clf=SGDClassifier(loss='hinge', penalty='l2')
+    labels = pickle.load(open('labels.pkl', 'r'))
+    tfidf = pickle.load(open('tfidf.{}.pkl'.format(max_df), 'r'))
+    if use_lsa:
+        svd = TruncatedSVD(n_components=100)
+        feats = svd.fit_transform(tfidf)
+        if type(clf) == MultinomialNB:
+            scaler = MinMaxScaler()
+            feats = scaler.fit_transform(feats)
+    else:
+        feats = tfidf
+    p_accs = .0
+    for i in range(0, n_iter):
+        feats_train, labels_train, feats_test, labels_test = fold(feats, labels)
+        clf.fit(feats_train, labels_train)
+        predicted = clf.predict(feats_test)
+        c_accs = ((labels_test-predicted)==0).nonzero()[0].shape[0]
+        p_accs += c_accs*100./labels_test.shape[0]
+    return p_accs/n_iter
