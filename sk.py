@@ -3,7 +3,7 @@ import os
 import os.path as path
 import numpy as np
 import pandas as pd
-from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 import Stemmer
 from sklearn.naive_bayes import MultinomialNB
 from sklearn.linear_model import SGDClassifier
@@ -48,6 +48,21 @@ class StemmedTfidfVectorizer(TfidfVectorizer):
     def build_analyzer(self):
         analyzer = super(TfidfVectorizer, self).build_analyzer()
         return lambda doc: Stemmer.Stemmer('en').stemWords(analyzer(doc))
+
+class StemmedCountVectorizer(CountVectorizer):
+    def build_analyzer(self):
+        analyzer = super(CountVectorizer, self).build_analyzer()
+        return lambda doc: Stemmer.Stemmer('en').stemWords(analyzer(doc))
+
+class MutualInformation:
+    def __init__(self, analyzer='word', stop_words='english', max_df=1.0):
+        self.vec = StemmedCountVectorizer(analyzer=analyzer, stop_words=stop_words, max_df=max_df)
+    def fit_transform(self, raw_documents, labels):
+        X = self.vec.fit_transform(raw_documents)
+        A = X*labels
+        B = X*(labels==0)
+        C = None
+        return X
 
 def fold(feats, labels):
     length = labels.shape[0]
