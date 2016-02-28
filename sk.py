@@ -99,18 +99,18 @@ def pickling(rep='tfidf', is_lemma=False):
         with open('{}.{}.{}.pkl'.format(rep, 'lemma' if is_lemma else 'stem', max_df), 'w') as f:
             pickle.dump(tfidf, f)
 
-def get_accuracy(max_df, n_iter=4, clf=MultinomialNB(), use_lsa=False):
+def get_accuracy(name='tfidf', max_df=1.0, n_iter=4, clf=MultinomialNB(), use_lsa=False):
     # SVM: clf=SGDClassifier(loss='hinge', penalty='l2')
     labels = pickle.load(open('labels.pkl', 'r'))
-    tfidf = pickle.load(open('tfidf.{}.pkl'.format(max_df), 'r'))
+    samples = pickle.load(open('{}.{}.pkl'.format(name, max_df), 'r'))
     if use_lsa:
         svd = TruncatedSVD(n_components=100)
-        feats = svd.fit_transform(tfidf)
+        feats = svd.fit_transform(samples)
         if type(clf) == MultinomialNB:
             scaler = MinMaxScaler()
             feats = scaler.fit_transform(feats)
     else:
-        feats = tfidf
+        feats = samples
     p_accs = .0
     for i in range(0, n_iter):
         feats_train, labels_train, feats_test, labels_test = fold(feats, labels)
@@ -119,3 +119,7 @@ def get_accuracy(max_df, n_iter=4, clf=MultinomialNB(), use_lsa=False):
         c_accs = ((labels_test-predicted)==0).nonzero()[0].shape[0]
         p_accs += c_accs*100./labels_test.shape[0]
     return p_accs/n_iter
+
+def count_features(name='tfidf', max_df=1.0):
+    samples = pickle.load(open('{}.{}.pkl'.format(name, max_df), 'r'))
+    return samples.shape[1]
