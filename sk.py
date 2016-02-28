@@ -12,9 +12,11 @@ from functools import partial
 import pickle
 from sklearn.decomposition import TruncatedSVD
 from sklearn.preprocessing import MinMaxScaler
+from nltk.stem import WordNetLemmatizer
 
 Enrons = 6
 Processes = multiprocessing.cpu_count()
+IsLemma = False
 
 def read_file(path, re_nonletter, re_oneletter):
     with open(path, 'r') as f:
@@ -45,14 +47,26 @@ def get_enron():
     return pd.DataFrame({'contents':contents, 'labels':labels})
 
 class StemmedTfidfVectorizer(TfidfVectorizer):
+    def use_lemma(self, is_lemma):
+        self.is_lemma = is_lemma
+        self.wnl = WordNetLemmatizer()
     def build_analyzer(self):
         analyzer = super(TfidfVectorizer, self).build_analyzer()
-        return lambda doc: Stemmer.Stemmer('en').stemWords(analyzer(doc))
+        if self.is_lemma:
+            return lambda doc: [self.wnl.lemmatize(t) for t in analyzer(doc)]
+        else:
+            return lambda doc: Stemmer.Stemmer('en').stemWords(analyzer(doc))
 
 class StemmedCountVectorizer(CountVectorizer):
+    def use_lemma(self, is_lemma):
+        self.is_lemma = is_lemma
+        self.wnl = WordNetLemmatizer()
     def build_analyzer(self):
         analyzer = super(CountVectorizer, self).build_analyzer()
-        return lambda doc: Stemmer.Stemmer('en').stemWords(analyzer(doc))
+        if self.is_lemma:
+            return lambda doc: [self.wnl.lemmatize(t) for t in analyzer(doc)]
+        else:
+            return lambda doc: Stemmer.Stemmer('en').stemWords(analyzer(doc))
 
 class MutualInformation:
     def __init__(self, analyzer='word', stop_words='english', max_df=1.0):
@@ -71,13 +85,18 @@ def fold(feats, labels):
     c_test = int(round(length*10./100))
     return _feats[c_test:], _labels[c_test:], _feats[:c_test], _labels[:c_test]
 
-def pickling():
+def pickling(rep='tfidf', is_lemma=False):
+    # rep='binary'
     contents = pickle.load(open('contents.pkl', 'r'))
     for max_df in np.arange(1., .0, -0.1):
-        vec = StemmedTfidfVectorizer(analyzer='word', stop_words='english', max_df=max_df)
+        if rep=='tfidf':
+            vec = StemmedTfidfVectorizer(analyzer='word', stop_words='english', max_df=max_df)
+        if rep=='binary':
+            vec = StemmedCountVectorizer(analyzer='word', stop_words='english', max_df=max_df, binary=True)
+        vec.use_lemma(is_lemma)
         tfidf = vec.fit_transform(contents)
         print 'max_df {} shape {}'.format(max_df, tfidf.shape[1])
-        with open('tfidf.{}.pkl'.format(max_df), 'w') as f:
+        with open('{}.{}.{}.pkl'.format(rep, 'lemma' if is_lemma else 'stem', max_df), 'w') as f:
             pickle.dump(tfidf, f)
 
 def get_accuracy(max_df, n_iter=4, clf=MultinomialNB(), use_lsa=False):
